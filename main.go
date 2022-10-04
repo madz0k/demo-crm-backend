@@ -1,22 +1,62 @@
 package main
 
 import (
-	"github.com/go-chi/chi"
+	"context"
+	"fmt"
+	"github.com/madz0k/demo-crm-backend/db"
+	"github.com/madz0k/demo-crm-backend/handler"
 	"log"
+	"net"
 	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
 )
 
 func main() {
-	port := "8080"
+	addr := ":8080"
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		log.Fatalf("Error occurred: %s", err.Error())
+	}
 
-	log.Printf("Starting up on http://localhost:%s", port)
+	dbUser, dbPassword, dbName :=
+		os.Getenv("POSTGRES_USER"),
+		os.Getenv("POSTGRES_PASSWORD"),
+		os.Getenv("POSTGRES_DB")
+	database, err := db.Initialize(dbUser, dbPassword, dbName)
+	if err != nil {
+		log.Fatalf("Could not set up datbase: %v", err)
+	}
+	defer database.Conn.Close()
 
-	r := chi.NewRouter()
+	httpHandler := handler.NewHandler(database)
+	server := &http.Server{
+		Handler: httpHandler,
+	}
 
-	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/plain")
-		w.Write([]byte("Hello World!"))
-	})
+	go func() {
+		server.Serve(listener)
+	}()
 
-	log.Fatal(http.ListenAndServe(":"+port, r))
+	defer Stop(server)
+
+	log.Printf("Started server on %s", addr)
+
+	// listen for ctrl+c signal from terminal
+	ch := make(chan os.Signal, 1)
+	signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM)
+	log.Println(fmt.Sprint(<-ch))
+	log.Println("Stopping API server.")
+
+}
+
+func Stop(server *http.Server) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := server.Shutdown(ctx); err != nil {
+		log.Printf("Could not shut down server correctly: %v\n", err)
+		os.Exit(1)
+	}
 }
